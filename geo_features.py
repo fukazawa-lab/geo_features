@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 import xml.etree.ElementTree as ET
 
 BASE = Path('/content/geospatial_features')
-DOWNLOAD = BASE / 'downloads'
+DOWNLOAD = BASE / 'common_data'
 EXTRACT = BASE / 'extracted'
 CACHE = BASE / 'cache'
 for p in (DOWNLOAD, EXTRACT, CACHE): p.mkdir(parents=True, exist_ok=True)
@@ -517,8 +517,9 @@ from pathlib import Path
 import pandas as pd
 from tqdm.auto import tqdm
 
-MESH_INPUT_DIR = BASE / 'downloads' / 'meshcode'
-MESH_OUTPUT_DIR = BASE  / 'downloads'/ 'output' / 'meshcode'
+MESH_INPUT_DIR = EXTRACT / 'meshcode'
+MESH_OUTPUT_DIR = BASE / 'output' / 'meshcode'
+MESH_INPUT_DIR.mkdir(parents=True, exist_ok=True)
 MESH_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -537,8 +538,35 @@ def third_mesh_center(code):
     return (south + north) / 2, (west + east) / 2  # latitude, longitude
 
 
-def enrich_meshcode_files():
-    files = sorted(MESH_INPUT_DIR.glob('*.csv'))
+def enrich_meshcode_files(prefecture='05'):
+    """Extract features for unique third-level meshes in a prefecture (01–47)."""
+    code = str(prefecture).zfill(2)
+    if code not in [f'{i:02d}' for i in range(1, 48)]:
+        raise ValueError('Prefecture code must be 01–47')
+    archive = DOWNLOAD / 'meshcode.zip'
+    with zipfile.ZipFile(archive) as z:
+        members = [n for n in z.namelist() if Path(n).name == code + '.csv']
+        if len(members) != 1:
+            raise ValueError(f'Expected exactly one {code}.csv in {archive}')
+        raw = z.read(members[0])
+    for encoding in ('utf-8-sig', 'cp932'):
+        try:
+            source = pd.read_csv(io.BytesIO(raw), encoding=encoding, dtype=str, header=None)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError('Unsupported CSV encoding')
+    candidates = [c for c in source.columns if source[c].str.strip().str.fullmatch(r'\d{4}[0-7]{2}\d{2}[*＊]?').fillna(False).sum() > 0]
+    if len(candidates) != 1:
+        raise ValueError('Cannot identify unique meshcode column')
+    values = source[candidates[0]].str.strip().str.rstrip('*＊')
+    values = values[values.str.fullmatch(r'\d{4}[0-7]{2}\d{2}').fillna(False)].drop_duplicates()
+    if values.empty:
+        raise ValueError('No valid mesh codes')
+    file = MESH_INPUT_DIR / f'{code}.csv'
+    pd.DataFrame({'meshcode': values}).to_csv(file, index=False, encoding='utf-8-sig')
+    files = [file]
     if not files:
         raise FileNotFoundError(f'No CSV files in {MESH_INPUT_DIR}')
     # Each mesh has one center and one fixed feature vector, even across input files.
@@ -579,23 +607,26 @@ def enrich_meshcode_files():
 
 
 
-# 一括処理B：クマ遭遇地点のCSV（一括処理Aとは独立して実行可能）。
-BEAR_INPUT_DIR = BASE / 'downloads' / 'bear'
-BEAR_OUTPUT_DIR = BASE / 'downloads' / 'output' / 'bear'
-BEAR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# 一括処理B：任意の観測地点のCSV（一括処理Aとは独立して実行可能）。
+POINT_INPUT_DIR = BASE / 'research_data'
+POINT_OUTPUT_DIR = BASE / 'output' / 'points'
+POINT_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+POINT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def enrich_bear_files():
-    files = sorted(BEAR_INPUT_DIR.glob('*.csv'))
+def enrich_point_files():
+    files = [POINT_INPUT_DIR / 'point.csv']
+    if not files[0].is_file():
+        raise FileNotFoundError(files[0])
     if not files:
-        raise FileNotFoundError(f'No CSV files in {BEAR_INPUT_DIR}')
+        raise FileNotFoundError(f'No CSV files in {POINT_INPUT_DIR}')
     for file in files:
         df = pd.read_csv(file, encoding='utf-8-sig', low_memory=False)
         if not {'lat', 'lon'}.issubset(df.columns):
             print(f'SKIP {file.name}: lat/lon columns required')
             continue
         enriched = []
-        for p in tqdm(df.itertuples(index=False), total=len(df), desc=f'Bear: {file.stem}'):
+        for p in tqdm(df.itertuples(index=False), total=len(df), desc=f'Points: {file.stem}'):
             lat, lon = pd.to_numeric(p.lat, errors='coerce'), pd.to_numeric(p.lon, errors='coerce')
             if pd.isna(lat) or pd.isna(lon) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
                 enriched.append({'feature_error': 'Invalid or missing latitude/longitude'})
@@ -606,7 +637,7 @@ def enrich_bear_files():
                 enriched.append({'feature_error': str(exc)})
         extra = pd.DataFrame(enriched, index=df.index).drop(columns=df.columns, errors='ignore')
         result = pd.concat([df, extra], axis=1)
-        destination = BEAR_OUTPUT_DIR / f'{file.stem}_features.csv'
+        destination = POINT_OUTPUT_DIR / f'{file.stem}_features.csv'
         result.to_csv(destination, index=False, encoding='utf-8-sig')
         print(f'Saved {destination} ({len(result):,} rows, {len(result.columns)} columns)')
 
@@ -620,11 +651,11 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from branca.colormap import LinearColormap
 
-def plot_mesh_feature(area_name='akita', feature_column='elev_avg_elevation',
+def plot_mesh_feature(area_name, feature_column='elev_avg_elevation',
                       cmap_name='terrain', save_html=True):
 
     # Load mesh-level features
-    path = BASE / 'downloads' / 'output' / 'meshcode' / f'{area_name}_features.csv'
+    path = BASE / 'output' / 'meshcode' / f'{area_name}_features.csv'
     df = pd.read_csv(path, dtype={'meshcode': 'string'})
 
     if feature_column not in df.columns:
@@ -718,7 +749,7 @@ def plot_mesh_feature(area_name='akita', feature_column='elev_avg_elevation',
     m.fit_bounds([[south, west], [north, east]])
 
     if save_html:
-        output = BASE / 'downloads' / 'output' / f'{area_name}_{feature_column}_map.html'
+        output = BASE / 'output' / f'{area_name}_{feature_column}_map.html'
         output.parent.mkdir(parents=True, exist_ok=True)
         m.save(str(output))
         print(f'Saved: {output}')
@@ -730,6 +761,6 @@ def extract_points(points):
     for p in tqdm(points.itertuples(index=False), total=len(points)):
         rows.append({**p._asdict(), **extract_features(p.latitude, p.longitude)})
     features = pd.DataFrame(rows)
-    output_path = BASE / 'point_mesh_features.csv'
+    output_path = BASE / 'output' / 'point_mesh_features.csv'
     features.to_csv(output_path, index=False, encoding='utf-8-sig')
     return features
