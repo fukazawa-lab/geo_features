@@ -4,7 +4,6 @@ from pathlib import Path
 import os, re, zipfile, warnings
 import numpy as np
 import pandas as pd
-import gdown
 import rasterio
 from rasterio.windows import from_bounds
 from rasterio.warp import transform_bounds
@@ -17,7 +16,6 @@ DOWNLOAD = BASE / 'downloads'
 EXTRACT = BASE / 'extracted'
 CACHE = BASE / 'cache'
 for p in (DOWNLOAD, EXTRACT, CACHE): p.mkdir(parents=True, exist_ok=True)
-FOLDER_URL = 'https://drive.google.com/drive/folders/1ED183x3b4Zl0oF26d7PN2Qm18f4nDA-a?usp=sharing'
 ARCHIVES = ['elevation.zip', 'road.zip', '2024JPN_v25.04.zip']
 
 ELEV_COLS = [
@@ -466,13 +464,6 @@ def initialize():
     global _initialized, elevation_df, road_df, elevation_index, road_index
     if _initialized:
         return
-    # 公開・共有リンクからダウンロードします。アクセス制限や回数制限があるとgdownが失敗することがあります。
-    # 失敗した場合は3つのZIPをDOWNLOADに手動アップロードし、このセルを再実行してください。
-    if not all((DOWNLOAD / x).exists() for x in ARCHIVES):
-        try:
-            gdown.download_folder(url=FOLDER_URL, output=str(DOWNLOAD), quiet=False, remaining_ok=True)
-        except Exception as e:
-            print('Automatic Drive folder download failed:', e)
     missing = [x for x in ARCHIVES if not (DOWNLOAD / x).is_file()]
     if missing:
         raise FileNotFoundError(f'Missing ZIP files: {missing}. Download/upload them to {DOWNLOAD}.')
