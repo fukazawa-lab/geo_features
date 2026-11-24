@@ -11,7 +11,7 @@ from pyproj import CRS, Transformer
 from tqdm.auto import tqdm
 import xml.etree.ElementTree as ET
 
-BASE = Path('/content/geospatial_features')
+BASE = Path(__file__).resolve().parent
 DOWNLOAD = BASE / 'common_data'
 EXTRACT = BASE / 'extracted'
 CACHE = BASE / 'cache'
@@ -615,9 +615,7 @@ POINT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def enrich_point_files():
-    files = [POINT_INPUT_DIR / 'point.csv']
-    if not files[0].is_file():
-        raise FileNotFoundError(files[0])
+    files = sorted(POINT_INPUT_DIR.glob('*.csv'))
     if not files:
         raise FileNotFoundError(f'No CSV files in {POINT_INPUT_DIR}')
     for file in files:
