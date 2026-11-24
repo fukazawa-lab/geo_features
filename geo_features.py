@@ -255,13 +255,10 @@ def landcover_in_radius(lat, lon, radius_m=500):
 
 
 
-import requests, io, zipfile
+import io
 from functools import lru_cache
 
-CENSUS_DIR = BASE / 'census_2020'
-CENSUS_DIR.mkdir(parents=True, exist_ok=True)
-
-CENSUS_URL = 'https://www.e-stat.go.jp/gis/statmap-search/data?statsId=T001100&code={}&downloadType=2'
+CENSUS_ZIP = DOWNLOAD / 'census_2020.zip'
 
 
 # JIS X 0410 third-level mesh (8 digits).
@@ -272,28 +269,16 @@ def latlon_to_meshcode(lat, lon):
     return f'{lat1:02d}{lon1:02d}{lat2}{lon2}{lat3}{lon3}'
 
 
-def download_census_tile(code4):
-    """Download and cache an e-Stat census ZIP."""
-    path = CENSUS_DIR / f'estat_{code4}.zip'
-
-    if not path.exists():
-        response = requests.get(CENSUS_URL.format(code4), timeout=120)
-        response.raise_for_status()
-
-        if not zipfile.is_zipfile(io.BytesIO(response.content)):
-            raise ValueError(f'e-Stat did not return a ZIP for {code4}')
-
-        path.write_bytes(response.content)
-
-    return path
-
-
 def read_census_tile(code4):
     """Read census TXT files using Shift-JIS and skip the first row."""
-    path = download_census_tile(code4)
+    member_name = f'estat_{code4}.zip'
     tables = []
+    with zipfile.ZipFile(CENSUS_ZIP) as outer:
+        if member_name not in outer.namelist():
+            raise FileNotFoundError(f'{member_name} is missing from {CENSUS_ZIP}')
+        tile = outer.read(member_name)
 
-    with zipfile.ZipFile(path) as z:
+    with zipfile.ZipFile(io.BytesIO(tile)) as z:
         for member in z.namelist():
             if member.lower().endswith('.txt'):
                 df = pd.read_csv(
@@ -307,7 +292,7 @@ def read_census_tile(code4):
                 tables.append(df)
 
     if not tables:
-        raise ValueError(f'No census TXT tables in {path}')
+        raise ValueError(f'No census TXT tables in {member_name}')
 
     return pd.concat(tables, ignore_index=True)
 
@@ -464,7 +449,7 @@ def initialize():
     global _initialized, elevation_df, road_df, elevation_index, road_index
     if _initialized:
         return
-    missing = [x for x in ARCHIVES if not (DOWNLOAD / x).is_file()]
+    missing = [x for x in ARCHIVES + [CENSUS_ZIP.name] if not (DOWNLOAD / x).is_file()]
     if missing:
         raise FileNotFoundError(f'Missing ZIP files: {missing}. Download/upload them to {DOWNLOAD}.')
 
